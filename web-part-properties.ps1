@@ -1,165 +1,161 @@
-﻿
-$testsite = ""
-$credentials = ""
+﻿# Fill in target site URL and credentials
 
-try
-{
+$siteURL = ""
 
-    # Set credentials for access to site context
-    $ctx = New-Object Microsoft.SharePoint.Client.ClientContext($testsite)
-    $ctx.Credentials = $credentials
+$username = ""
+$pw = "" 
+$password = ConvertTo-SecureString $pw -AsPlainText -Force 
+$credentials = New-Object Microsoft.SharePoint.Client.SharePointOnlineCredentials($username, $password)
 
-    # Create reference to the root of the site collection
-    $siteCollection = $ctx.Web
+$ctx = New-Object Microsoft.SharePoint.Client.ClientContext($siteURL)
+$ctx.Credentials = $credentials
 
-    # Create reference to sites in root
+$rootWeb = $ctx.Web
+$ctx.Load($rootWeb)
 
-    $sites = $siteCollection.Webs
+$ctx.ExecuteQuery()
 
-    $ctx.Load($siteCollection)
-    $ctx.Load($sites)
+function IterateFoldersInSubsites($spoSite, $folderNameArray) {
 
+    Write-Host "`nScanning Site: $($spoSite.Url)" -ForegroundColor Yellow
+
+    $ctx.Load($spoSite.Webs)
     $ctx.ExecuteQuery()
 
-    Write-Host "`nIterating sites in site collection:`n" -ForegroundColor red
+    $index = 0
 
+    if ($spoSite.Webs.Count -eq 0) {
+        Write-Host "`nNo subsites in spoSite: $($spoSite.Url)"
+    }
+ 
+    foreach($subWeb in $spoSite.Webs)
+    {
+        # Recursively iterate subsites
+        IterateFoldersInSubsites -spoSite $subWeb -folderNameArray $folderNameArray
 
-    ###############################################################
-    ################# SITE COLLECTION ROOT SITE ###################
-
-    $rootpagelist = $siteCollection.Lists.GetByTitle("Site Pages")
-    $ctx.Load($rootpagelist)
-    $ctx.ExecuteQuery() 
-
-    $query = [Microsoft.SharePoint.Client.CamlQuery]::CreateAllItemsQuery(100)
-    $rootpages = $rootpagelist.GetItems($query)
-
-    $ctx.Load($rootpages)
-    $ctx.ExecuteQuery() 
-
-    Write-Host $siteCollection.Title "contains" $rootpages.Count "pages:`n" -ForegroundColor yellow
-
-    $rootpages | foreach {
-        $file = $_.File
-        $ctx.Load($file)
-        $ctx.ExecuteQuery() 
-        Write-Host $file.ServerRelativeUrl
-
-        $page = $siteCollection.GetFileByServerRelativeUrl($file.ServerRelativeUrl)
-
-        $wpManager = $page.GetLimitedWebPartManager([Microsoft.Sharepoint.Client.WebParts.PersonalizationScope]::Shared)
-        $wps = $wpManager.WebParts
-
-        $ctx.Load($page)
-        $ctx.Load($wps)
-        $ctx.ExecuteQuery() 
-
-        Write-Host "`nIterating Web Parts on page: " $file.ServerRelativeUrl -ForegroundColor yellow
-
-        foreach($wp in $wps) { 
-            
-            $wpActual = $wp.WebPart
-            $ctx.Load($wps)
-            $ctx.Load($wpActual)
-            $ctx.ExecuteQuery() 
-
-            Write-Host "`nWeb Part: " $wpActual.Title
-
-            $actualprops = $wpActual.Properties
-
-            $ctx.Load($actualprops)
-            $ctx.ExecuteQuery() 
-
-            Write-Host "Looking for property ChromeType..." 
-            Write-Host "ChromeType: " $wpActual.Properties.FieldValues.ChromeType -ForegroundColor red
-            Write-Host "Changing Chrometype to 1 [Title and Border] ... " 
-            $wpActual.Properties["ChromeType"] = 1
-            Write-Host "Current Chrometype:" $wpActual.Properties.FieldValues["ChromeType"] -ForegroundColor green
-
-            $wp.SaveWebPartChanges()
+        # When returns, do...
+        Write-Host "`nScanning Pages in Web: $($subWeb.Url)"
+        
+        foreach ($folderName in $folderNameArray)
+        {
+            $result = IteratePages -spoWeb $subWeb -folderName $folderName
+            if ($result) {
+                # OK
+            }
+            else {
+                # NO FOLDER FOUND
+            }
         }
+    }
+}
 
+function IteratePages($spoWeb, $folderName) {
+    
+    Write-Host "Looking for folder '$($folderName)'" -NoNewline
+
+    $pageList = $spoWeb.Lists.GetByTitle($folderName)
+    $query = [Microsoft.SharePoint.Client.CamlQuery]::CreateAllItemsQuery(100)
+    $pageItems = $pageList.GetItems($query)
+
+    try 
+    {
+        $ctx.Load($pageList)
+        $ctx.Load($pageItems)
         $ctx.ExecuteQuery() 
     }
+    catch
+    {
+        Write-Host  "... was not found."
+        return $false
+    }
 
-    ###############################################################
-    ################# SITE COLLECTION SUBSITES ####################
+    # So now we our List and it's items
 
-    foreach($site in $sites) {
- 
-        $pagelist = $site.Lists.GetByTitle("Site Pages")
+    if ($pageList.ItemCount -ne 0) 
+    {
+        Write-Host "Found $($pageList.ItemCount) pages in $($pageList.Title)..."
+        
+        $index = 1
 
-        $ctx.Load($pagelist)
-        $ctx.ExecuteQuery()
-
-        $query = [Microsoft.SharePoint.Client.CamlQuery]::CreateAllItemsQuery(100)
-        $pages = $pagelist.GetItems($query)
-
-        $ctx.Load($pages)
-        $ctx.ExecuteQuery() 
-
-        Write-Host
-        Write-Host $site.Title "contains" $pages.Count "pages:`n" -ForegroundColor yellow
-
-        $pages | foreach {
-
-            $file = $_.File
+        foreach($page in $pageItems) 
+        {
+            $file = $page.File
+            $ctx.Load($page)
             $ctx.Load($file)
             $ctx.ExecuteQuery() 
-            Write-Host $file.ServerRelativeUrl
-
-            $page = $siteCollection.GetFileByServerRelativeUrl($file.ServerRelativeUrl)
-
-            $wpManager = $page.GetLimitedWebPartManager([Microsoft.Sharepoint.Client.WebParts.PersonalizationScope]::Shared)
-            $wps = $wpManager.WebParts
-
-            $ctx.Load($page)
-            $ctx.Load($wps)
-            $ctx.ExecuteQuery() 
-
-            Write-Host "`nIterating Web Parts on page: " $file.ServerRelativeUrl -ForegroundColor red
-
-            try {
-                foreach($wp in $wps) { 
+            Write-Host "`n($($index)) Url: $($file.ServerRelativeUrl)"
             
-                    $wpActual = $wp.WebPart
-                    $ctx.Load($wps)
-                    $ctx.Load($wpActual)
-                    $ctx.ExecuteQuery() 
+            $wpManager = $file.GetLimitedWebPartManager([Microsoft.Sharepoint.Client.WebParts.PersonalizationScope]::Shared)
+            
+            $ctx.Load($wpManager)
+            $ctx.ExecuteQuery()
 
-                    Write-Host "`nWeb Part: " $wpActual.Title
+            $webParts = $wpManager.WebParts
+            $ctx.Load($webParts)
+            $ctx.ExecuteQuery()
 
-                    $actualprops = $wpActual.Properties
-                    #$fieldvalues = $wpActual.Properties.FieldValues
-                    $ctx.Load($actualprops)
-                    $ctx.ExecuteQuery() 
+            Write-Host "Found $($wpManager.WebParts.Count) webparts in $($file.ServerRelativeUrl):`n"
+            UpdateWebParts -webParts $webParts -chromeType $chromeType
 
-                    Write-Host "Looking for property ChromeType..." 
-                    Write-Host "ChromeType: " $wpActual.Properties.FieldValues.ChromeType -ForegroundColor red
-                    Write-Host "Changing Chrometype to 1 [Title and Border] ... " 
-                    $wpActual.Properties["ChromeType"] = 1
-                    Write-Host "Current Chrometype:" $wpActual.Properties.FieldValues["ChromeType"] -ForegroundColor green
-
-                    $wp.SaveWebPartChanges()
-                }
-
-                
-            }
-            catch [System.Exception]
-            {
-                Write-Host "Something went wrong, continuing..."
-            }
-
-            $ctx.ExecuteQuery() 
-
+            $index++
         }
     }
-
-    $ctx.Dispose()
 }
-catch [System.Exception]
+
+function UpdateWebParts($webParts, $chromeType) {
+
+    foreach($wp in $webParts) { 
+
+        $wpActual = $wp.WebPart
+        $ctx.Load($wpActual)
+        $ctx.ExecuteQuery() 
+
+        Write-Host "Web Part: $($wpActual.Title)"
+
+        $actualprops = $wpActual.Properties
+
+        $ctx.Load($actualprops)
+        $ctx.ExecuteQuery() 
+
+        Write-Host "Looking for property ChromeType..." 
+
+        if ($wpActual.Properties.FieldValues.ChromeType -ne $chromeType) 
+        {
+            Write-Host "ChromeType: $($wpActual.Properties.FieldValues.ChromeType)" -ForegroundColor yellow
+            Write-Host "Updating Chrometype... " 
+            $wpActual.Properties["ChromeType"] = $chromeType 
+            Write-Host "Current Chrometype: $($wpActual.Properties.FieldValues["ChromeType"])" -ForegroundColor green
+            $wp.SaveWebPartChanges(); 
+        }
+        else {
+            Write-Host "ChromeType: $($wpActual.Properties.FieldValues.ChromeType) OK "
+        }
+        
+        try {
+            $ctx.ExecuteQuery() 
+        }    
+        catch {
+            Write-Host "`nProblem updating ChromeType for $($wpActual.Title)" -ForegroundColor red
+            Write-Host $_
+        } 
+    }      
+}
+
+# Edit following parameters to match your intranet's folder structure and the wanted chrometype
+[string[]] $folderNameArray = "Site Pages", "Pages"
+[int] $chromeType = 0
+
+cls
+Write-Host "$($folderNameArray.Count) folder names defined"
+IterateFoldersInSubsites -spoSite $rootWeb -folderNameArray $folderNameArray
+
+foreach ($folderName in $folderNameArray)
 {
-    Write-Host -f red $_.Exception.ToString()   
-}   
-
-
+    $result = IteratePages -spoWeb $rootWeb -folderName $folderName
+    if ($result) {
+        # OK
+    }
+    else {
+        # NO FOLDER FOUND
+    }
+}
